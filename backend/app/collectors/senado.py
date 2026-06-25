@@ -54,9 +54,9 @@ class SenadoCollector(BaseCollector):
 
     async def coletar(self) -> list[dict]:
         today = date.today()
-        last_30_days = today - timedelta(days=30)
+        last_7_days = today - timedelta(days=7)
 
-        all_materias = await self._buscar_por_periodo(last_30_days, today)
+        all_materias = await self._buscar_por_periodo(last_7_days, today)
         logger.info(f"[SENADO] Total de matérias no período: {len(all_materias)}")
         return all_materias
 
