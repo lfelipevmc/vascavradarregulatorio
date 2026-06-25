@@ -3,7 +3,8 @@ Senado Federal collector.
 Uses the official API: https://legis.senado.leg.br/dadosabertos/materia/pesquisa/lista
 
 NOTE: The API does NOT support free-text palavraChave for general terms.
-We fetch by date range and filter locally by infrastructure keywords.
+We fetch all materias by date range (last 30 days) without keyword filtering.
+All bills are saved; sector classification is done locally.
 """
 import logging
 from datetime import date, datetime, timedelta
@@ -37,12 +38,6 @@ KEYWORDS_SETOR = {
     SetorNormativo.ESPORTE: ["esporte", "desporto", "futebol", "olímpico", "olimpico"],
 }
 
-INFRA_KEYWORDS_FILTER = [kw for kws in KEYWORDS_SETOR.values() for kw in kws] + [
-    "infraestrutura", "concessão", "concessao", "regulação", "regulacao",
-    "agência reguladora", "agencia reguladora", "licitação", "licitacao",
-    "privatização", "privatizacao", "parceria público", "parceria publico",
-]
-
 
 def _detectar_setor_senado(texto: str) -> SetorNormativo:
     texto_lower = texto.lower()
@@ -52,11 +47,6 @@ def _detectar_setor_senado(texto: str) -> SetorNormativo:
     return SetorNormativo.GERAL
 
 
-def _is_infra_relevante(ementa: str) -> bool:
-    ementa_lower = ementa.lower()
-    return any(kw in ementa_lower for kw in INFRA_KEYWORDS_FILTER)
-
-
 class SenadoCollector(BaseCollector):
     """Collects bills from Senado Federal."""
 
@@ -64,35 +54,36 @@ class SenadoCollector(BaseCollector):
 
     async def coletar(self) -> list[dict]:
         today = date.today()
-        last_week = today - timedelta(days=7)
+        last_30_days = today - timedelta(days=30)
 
-        all_materias = await self._buscar_por_periodo(last_week, today)
+        all_materias = await self._buscar_por_periodo(last_30_days, today)
         logger.info(f"[SENADO] Total de matérias no período: {len(all_materias)}")
-
-        # Filter locally for infrastructure relevance
-        relevant = [m for m in all_materias if _is_infra_relevante(m.get("ementa", "") + m.get("titulo", ""))]
-        logger.info(f"[SENADO] Matérias relevantes para infraestrutura: {len(relevant)}")
-        return relevant
+        return all_materias
 
     async def _buscar_por_periodo(self, data_inicio: date, data_fim: date) -> list[dict]:
         """Fetch all materias in a date range without keyword filter."""
+        import httpx
+
         params = {
             "dataInicioApresentacao": data_inicio.strftime("%Y%m%d"),
             "dataFimApresentacao": data_fim.strftime("%Y%m%d"),
             "v": "7",
         }
 
+        # Use a fresh client — the shared self.http_client may behave differently
+        # with the deprecated Senado endpoint.
         try:
-            resp = await self._get(
-                SENADO_MATERIAS_URL,
-                params=params,
-                headers={"Accept": "application/json"},
-            )
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                resp = await client.get(
+                    SENADO_MATERIAS_URL,
+                    params=params,
+                    headers={"Accept": "application/json", "User-Agent": "RadarRegulatorio/1.0"},
+                )
         except Exception as exc:
             logger.error(f"[SENADO] Falha na request HTTP: {exc}")
             return []
 
-        logger.info(f"[SENADO] HTTP {resp.status_code} - Content-Type: {resp.headers.get('content-type', '?')}")
+        logger.info(f"[SENADO] HTTP {resp.status_code} - {resp.headers.get('content-type', '?')}")
 
         if resp.status_code != 200:
             logger.error(f"[SENADO] Erro HTTP {resp.status_code}: {resp.text[:300]}")
@@ -113,6 +104,8 @@ class SenadoCollector(BaseCollector):
 
         if isinstance(materias, dict):
             materias = [materias]
+
+        logger.info(f"[SENADO] {len(materias)} matérias brutas recebidas da API")
 
         items = []
         for materia in materias:
