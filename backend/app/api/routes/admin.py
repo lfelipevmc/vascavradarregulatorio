@@ -76,6 +76,38 @@ async def trigger_collect(
     }
 
 
+@router.get("/admin/test/senado")
+async def test_senado_api(x_admin_key: str = Header(...)) -> dict:
+    """Test Senado API directly and return raw response for debugging."""
+    if x_admin_key != _get_admin_key():
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+
+    import httpx
+    from datetime import date, timedelta
+
+    today = date.today()
+    last_week = today - timedelta(days=7)
+    url = "https://legis.senado.leg.br/dadosabertos/materia/pesquisa/lista"
+    params = {
+        "palavraChave": "infraestrutura",
+        "dataInicioApresentacao": last_week.strftime("%Y%m%d"),
+        "dataFimApresentacao": today.strftime("%Y%m%d"),
+        "v": "7",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            resp = await client.get(url, params=params, headers={"Accept": "application/json"})
+        return {
+            "status_code": resp.status_code,
+            "content_type": resp.headers.get("content-type"),
+            "url_called": str(resp.url),
+            "body_preview": resp.text[:1000],
+            "params": params,
+        }
+    except Exception as exc:
+        return {"erro": str(exc), "tipo": type(exc).__name__, "params": params}
+
+
 @router.get("/admin/collect/status")
 async def collect_status(x_admin_key: str = Header(...)) -> dict:
     """Check recent job logs."""

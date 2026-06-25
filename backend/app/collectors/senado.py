@@ -93,15 +93,16 @@ class SenadoCollector(BaseCollector):
             "v": "7",
         }
 
+        resp = await self._get(
+            SENADO_MATERIAS_URL,
+            params=params,
+            headers={"Accept": "application/json"},
+        )
+        logger.info(f"[SENADO] HTTP {resp.status_code} para '{keyword}' - Content-Type: {resp.headers.get('content-type','?')}")
         try:
-            resp = await self._get(
-                SENADO_MATERIAS_URL,
-                params=params,
-                headers={"Accept": "application/json"},
-            )
             data = resp.json()
         except Exception as exc:
-            logger.warning(f"[SENADO] Falha na request para '{keyword}': {exc}")
+            logger.error(f"[SENADO] JSON parse error para '{keyword}': {exc} - body[:200]: {resp.text[:200]}")
             return []
 
         items = []
