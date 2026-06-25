@@ -1,4 +1,5 @@
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,7 +36,50 @@ app.include_router(health.router, tags=["health"])
 app.include_router(normativos.router, prefix=settings.api_prefix, tags=["normativos"])
 
 
+def _start_scheduler() -> None:
+    """Start APScheduler with daily collection jobs (replaces Celery Beat on free tier)."""
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        import pytz
+
+        brasilia = pytz.timezone("America/Sao_Paulo")
+        scheduler = BackgroundScheduler(timezone=brasilia)
+
+        def run_collector(fonte: str) -> None:
+            try:
+                import importlib
+                mod = importlib.import_module(f"app.collectors.{fonte}")
+                cls_name = "".join(p.capitalize() for p in fonte.split("_")) + "Collector"
+                collector = getattr(mod, cls_name)()
+                import asyncio
+                asyncio.run(collector.coletar())
+                logger.info("Coleta %s concluída", fonte)
+            except Exception as exc:
+                logger.error("Erro na coleta %s: %s", fonte, exc)
+
+        # Coleta diária: DOU às 06h, agências às 07h, TCU às 08h, legislativo às 09h
+        for fonte, hour in [("dou", 6), ("aneel", 7), ("antt", 7), ("anac", 7),
+                             ("anatel", 7), ("anm", 7), ("tcu", 8),
+                             ("camara", 9), ("senado", 9)]:
+            scheduler.add_job(
+                run_collector,
+                trigger=CronTrigger(hour=hour, minute=0),
+                args=[fonte],
+                id=f"coleta_{fonte}",
+                replace_existing=True,
+            )
+
+        scheduler.start()
+        logger.info("APScheduler iniciado com %d jobs de coleta", len(scheduler.get_jobs()))
+    except Exception as exc:
+        logger.warning("APScheduler não iniciado: %s", exc)
+
+
 @app.on_event("startup")
 async def startup_event() -> None:
-    logger.info(f"Starting {settings.app_name} v{settings.app_version}")
-    logger.info(f"Environment: {settings.environment}")
+    logger.info("Starting %s v%s", settings.app_name, settings.app_version)
+    logger.info("Environment: %s", settings.environment)
+
+    if os.environ.get("ENABLE_SCHEDULER", "false").lower() == "true":
+        _start_scheduler()
