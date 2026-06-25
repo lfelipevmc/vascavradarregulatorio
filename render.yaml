@@ -35,11 +35,12 @@ services:
     name: radar-frontend
     runtime: node
     rootDir: frontend
-    nodeVersion: "20"
     buildCommand: npm install && npm run build
     startCommand: npm start
     plan: free
     envVars:
+      - key: NODE_VERSION
+        value: "20"
       - key: NEXT_PUBLIC_API_URL
         value: https://radar-api.onrender.com
 
