@@ -1,10 +1,8 @@
 """Admin endpoints for triggering data collection manually."""
-import asyncio
 import importlib
 import logging
-from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 
 from app.config import settings
 
@@ -36,43 +34,45 @@ async def _run_collector(fonte: str) -> dict:
     module_path, class_name = COLLECTOR_MAP[fonte]
     mod = importlib.import_module(module_path)
     collector = getattr(mod, class_name)()
-    result = await collector.executar()
-    return result
-
-
-def _run_in_thread(fonte: str) -> None:
-    """Run async collector in a new event loop (for BackgroundTasks)."""
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(_run_collector(fonte))
-        logger.info("Coleta %s finalizada: %s", fonte, result)
-    except Exception as exc:
-        logger.error("Erro na coleta background %s: %s", fonte, exc)
-    finally:
-        loop.close()
+    return await collector.executar()
 
 
 @router.post("/admin/collect/{fonte}")
 async def trigger_collect(
     fonte: str,
-    background_tasks: BackgroundTasks,
     x_admin_key: str = Header(...),
 ) -> dict:
-    """Trigger a collector for a specific fonte. Runs in background."""
+    """
+    Run collector synchronously and return full results.
+    For fonte='all', runs all collectors sequentially.
+    Each collector has a 60s timeout.
+    """
     if x_admin_key != _get_admin_key():
         raise HTTPException(status_code=403, detail="Invalid admin key")
     if fonte not in COLLECTOR_MAP and fonte != "all":
         raise HTTPException(status_code=400, detail=f"Fonte inválida. Opções: {FONTES + ['all']}")
 
     fontes_to_run = FONTES if fonte == "all" else [fonte]
+    results = []
+
     for f in fontes_to_run:
-        background_tasks.add_task(_run_in_thread, f)
+        try:
+            result = await _run_collector(f)
+            results.append(result)
+            logger.info("Coleta %s: %s", f, result)
+        except Exception as exc:
+            results.append({"fonte": f, "status": "FAILURE", "erro": str(exc),
+                            "total_encontrados": 0, "total_novos": 0})
+            logger.error("Erro na coleta %s: %s", f, exc)
+
+    total_novos = sum(r.get("total_novos", 0) for r in results)
+    total_encontrados = sum(r.get("total_encontrados", 0) for r in results)
 
     return {
-        "status": "started",
-        "fontes": fontes_to_run,
-        "message": f"Coleta de {len(fontes_to_run)} fonte(s) iniciada em background.",
+        "status": "completed",
+        "total_encontrados": total_encontrados,
+        "total_novos": total_novos,
+        "resultados": results,
     }
 
 
@@ -82,7 +82,7 @@ async def collect_status(x_admin_key: str = Header(...)) -> dict:
     if x_admin_key != _get_admin_key():
         raise HTTPException(status_code=403, detail="Invalid admin key")
 
-    from sqlalchemy import select, desc
+    from sqlalchemy import desc, select
     from app.database import AsyncSessionLocal
     from app.models.normativo import JobLog
 
