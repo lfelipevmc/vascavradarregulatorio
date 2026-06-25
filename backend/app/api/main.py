@@ -4,7 +4,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health, normativos
+from app.api.routes import health, normativos, admin
 from app.config import settings
 
 logging.basicConfig(
@@ -34,6 +34,7 @@ app.add_middleware(
 
 app.include_router(health.router, tags=["health"])
 app.include_router(normativos.router, prefix=settings.api_prefix, tags=["normativos"])
+app.include_router(admin.router, prefix=settings.api_prefix, tags=["admin"])
 
 
 def _start_scheduler() -> None:
