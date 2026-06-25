@@ -160,6 +160,10 @@ class BaseCollector(ABC):
                 await session.rollback()
                 logger.debug(f"[{self.fonte.value}] Race condition - hash já existe: {hash_val[:8]}")
                 return False
+            except Exception as exc:
+                await session.rollback()
+                logger.error(f"[{self.fonte.value}] ERRO AO INSERIR normativo: {type(exc).__name__}: {exc}", exc_info=True)
+                raise
 
     @staticmethod
     def _hash_conteudo(texto: str) -> str:
