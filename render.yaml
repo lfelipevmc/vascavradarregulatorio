@@ -35,7 +35,7 @@ services:
     name: radar-frontend
     runtime: node
     rootDir: frontend
-    buildCommand: npm install && npm run build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     plan: free
     envVars:
