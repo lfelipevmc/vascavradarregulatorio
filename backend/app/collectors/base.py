@@ -63,6 +63,7 @@ class BaseCollector(ABC):
             await session.refresh(job)
             job_log_id = job.id
 
+        erros_salvar: list[str] = []
         try:
             items = await self.coletar()
             total_encontrados = len(items)
@@ -74,7 +75,10 @@ class BaseCollector(ABC):
                     if saved:
                         total_novos += 1
                 except Exception as exc:
-                    logger.warning(f"[{self.fonte.value}] Erro ao salvar item: {exc}")
+                    msg = f"{type(exc).__name__}: {exc}"
+                    logger.warning(f"[{self.fonte.value}] Erro ao salvar item: {msg}")
+                    if len(erros_salvar) < 3:  # collect first 3 unique errors
+                        erros_salvar.append(msg)
 
             status = "SUCCESS"
         except RetryError as exc:
@@ -103,6 +107,7 @@ class BaseCollector(ABC):
             "total_encontrados": total_encontrados,
             "total_novos": total_novos,
             "erro": erro,
+            "erros_salvar": erros_salvar,
         }
 
     async def salvar_normativo(self, data: dict) -> bool:
