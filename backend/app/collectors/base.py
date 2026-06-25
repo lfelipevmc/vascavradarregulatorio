@@ -149,9 +149,12 @@ class BaseCollector(ABC):
                     f"[{self.fonte.value}] Novo normativo salvo: id={normativo.id} "
                     f"titulo={normativo.titulo[:60]}"
                 )
-                # Trigger async AI processing
-                from app.tasks.coleta import processar_normativo_ia  # avoid circular import
-                processar_normativo_ia.delay(normativo.id)
+                # Trigger async AI processing (optional — requires Celery/Redis)
+                try:
+                    from app.tasks.coleta import processar_normativo_ia
+                    processar_normativo_ia.delay(normativo.id)
+                except Exception as celery_exc:
+                    logger.debug(f"[{self.fonte.value}] Celery indisponível, IA ignorada: {celery_exc}")
                 return True
             except IntegrityError:
                 await session.rollback()
