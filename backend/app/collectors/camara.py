@@ -5,6 +5,8 @@ Uses the official API: https://dadosabertos.camara.leg.br/api/v2/proposicoes
 import logging
 from datetime import date, datetime, timedelta
 
+import httpx
+
 from app.collectors.base import BaseCollector
 from app.models.normativo import FonteNormativo, SetorNormativo, TipoNormativo
 
@@ -80,7 +82,12 @@ class CamaraCollector(BaseCollector):
         }
 
         try:
-            resp = await self._get(CAMARA_PROPOSICOES_URL, params=params)
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                resp = await client.get(CAMARA_PROPOSICOES_URL, params=params,
+                                        headers={"Accept": "application/json"})
+            if resp.status_code != 200:
+                logger.warning(f"[CAMARA] HTTP {resp.status_code} para tema {tema_id}")
+                return []
             data = resp.json()
         except Exception as exc:
             logger.warning(f"[CAMARA] Falha na request para tema {tema_id}: {exc}")

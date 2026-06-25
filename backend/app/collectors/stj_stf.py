@@ -19,8 +19,6 @@ STF_API_URL = "https://jurisprudencia.stf.jus.br/api/search/search"
 INFRA_KEYWORDS = [
     "agência reguladora",
     "concessão de serviço público",
-    "ANEEL",
-    "ANTT",
 ]
 
 SETOR_MAP = {
