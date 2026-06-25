@@ -90,6 +90,11 @@ playwright-report/
 test-results/
 playwright/.cache/
 
+# SQLite dev databases
+*.db
+*.sqlite
+*.sqlite3
+
 # Misc
 *.bak
 *.tmp
