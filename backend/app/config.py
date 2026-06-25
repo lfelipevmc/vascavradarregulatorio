@@ -30,7 +30,12 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
 
     # CORS
-    allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
+    allowed_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "https://radar-frontend-y3i5.onrender.com",
+        "https://radar-api-zefw.onrender.com",
+    ]
 
     # Celery
     celery_broker_url: str = "redis://localhost:6379/0"

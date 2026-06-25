@@ -42,7 +42,7 @@ services:
       - key: NODE_VERSION
         value: "20"
       - key: NEXT_PUBLIC_API_URL
-        value: https://radar-api.onrender.com
+        value: https://radar-api-zefw.onrender.com
 
   # ── Redis ─────────────────────────────────────────────────────────────────────
   - type: redis
