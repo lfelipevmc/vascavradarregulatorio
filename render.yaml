@@ -1,0 +1,102 @@
+services:
+  # ── API (FastAPI) ────────────────────────────────────────────────────────────
+  - type: web
+    name: radar-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile.render
+    dockerContext: ./backend
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: radar-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: radar-redis
+          type: redis
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: ALLOWED_ORIGINS
+        value: '["https://radar-frontend.onrender.com","http://localhost:3000"]'
+
+  # ── Celery Worker ─────────────────────────────────────────────────────────────
+  - type: worker
+    name: radar-worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile.render
+    dockerContext: ./backend
+    plan: free
+    dockerCommand: celery -A app.tasks.celery_app worker --loglevel=info -Q default,coleta,ia --concurrency=2
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: radar-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: radar-redis
+          type: redis
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+
+  # ── Celery Beat (agendador diário) ────────────────────────────────────────────
+  - type: worker
+    name: radar-beat
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile.render
+    dockerContext: ./backend
+    plan: free
+    dockerCommand: celery -A app.tasks.celery_app beat --loglevel=info --scheduler celery.beat.PersistentScheduler
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: radar-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: radar-redis
+          type: redis
+          property: connectionString
+      - key: ENVIRONMENT
+        value: production
+
+  # ── Frontend (Next.js) ────────────────────────────────────────────────────────
+  - type: web
+    name: radar-frontend
+    runtime: node
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    plan: free
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          name: radar-api
+          type: web
+          property: host
+          envVarKey: NEXT_PUBLIC_API_URL
+
+# ── Redis ─────────────────────────────────────────────────────────────────────
+  - type: redis
+    name: radar-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+
+databases:
+  # ── PostgreSQL ────────────────────────────────────────────────────────────────
+  - name: radar-db
+    plan: free
+    databaseName: radar_regulatorio
+    user: radar

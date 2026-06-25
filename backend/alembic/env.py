@@ -19,8 +19,8 @@ from app.models import normativo  # noqa: F401
 
 config = context.config
 
-# Override sqlalchemy.url from settings so Docker env vars work
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Override sqlalchemy.url from settings so Docker/Render env vars work
+config.set_main_option("sqlalchemy.url", settings.sync_database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -56,9 +56,7 @@ def do_run_migrations(connection: Connection) -> None:
 async def run_async_migrations() -> None:
     """Run migrations in async mode (required for asyncpg)."""
     # Use sync psycopg2 URL for Alembic (Alembic itself is sync)
-    sync_url = settings.database_url
-    if "asyncpg" in sync_url:
-        sync_url = sync_url.replace("+asyncpg", "")
+    sync_url = settings.sync_database_url
 
     connectable = async_engine_from_config(
         {"sqlalchemy.url": sync_url.replace("postgresql://", "postgresql+asyncpg://")},

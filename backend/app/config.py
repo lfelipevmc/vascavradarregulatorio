@@ -62,10 +62,21 @@ class Settings(BaseSettings):
     @property
     def async_database_url(self) -> str:
         url = self.database_url
+        # Render provides postgres:// — normalize first
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
         elif url.startswith("sqlite:///") and "+aiosqlite" not in url:
             url = url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+        return url
+
+    @property
+    def sync_database_url(self) -> str:
+        """psycopg2-compatible URL for Alembic (sync)."""
+        url = self.database_url
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
         return url
 
     @property
