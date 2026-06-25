@@ -94,14 +94,25 @@ async def test_senado_api(x_admin_key: str = Header(...)) -> dict:
         "dataFimApresentacao": today.strftime("%Y%m%d"),
         "v": "7",
     }
+    # No keyword — fetch by date range only (API rejects free-text palavraChave)
+    params.pop("palavraChave", None)
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             resp = await client.get(url, params=params, headers={"Accept": "application/json"})
+        body = resp.text
+        try:
+            import json
+            parsed = json.loads(body)
+            materias = parsed.get("PesquisaBasicaMateria", {}).get("Materias", {}).get("Materia", [])
+            count = len(materias) if isinstance(materias, list) else (1 if materias else 0)
+        except Exception:
+            count = -1
         return {
             "status_code": resp.status_code,
             "content_type": resp.headers.get("content-type"),
             "url_called": str(resp.url),
-            "body_preview": resp.text[:1000],
+            "total_materias": count,
+            "body_preview": body[:500],
             "params": params,
         }
     except Exception as exc:

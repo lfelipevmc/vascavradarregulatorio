@@ -1,6 +1,9 @@
 """
 Senado Federal collector.
 Uses the official API: https://legis.senado.leg.br/dadosabertos/materia/pesquisa/lista
+
+NOTE: The API does NOT support free-text palavraChave for general terms.
+We fetch by date range and filter locally by infrastructure keywords.
 """
 import logging
 from datetime import date, datetime, timedelta
@@ -12,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 SENADO_API_BASE = "https://legis.senado.leg.br/dadosabertos"
 SENADO_MATERIAS_URL = f"{SENADO_API_BASE}/materia/pesquisa/lista"
-SENADO_MATERIA_DETAIL = f"{SENADO_API_BASE}/materia"
 
 TIPO_MAP_SENADO = {
     "PL": TipoNormativo.PROJETO_LEI,
@@ -26,23 +28,19 @@ TIPO_MAP_SENADO = {
 }
 
 KEYWORDS_SETOR = {
-    SetorNormativo.ENERGIA: ["energia", "elétric", "petróleo", "gás", "combustível", "ANEEL"],
-    SetorNormativo.TRANSPORTE: ["transport", "rodovia", "ferrovi", "porto", "ANTT"],
-    SetorNormativo.AVIACAO: ["aviação", "aeronáut", "aeroporto", "ANAC"],
-    SetorNormativo.MINERACAO: ["mineração", "minério", "ANM"],
-    SetorNormativo.TELECOMUNICACOES: ["telecom", "ANATEL", "internet", "banda larga"],
-    SetorNormativo.SANEAMENTO: ["saneamento", "água", "esgoto"],
-    SetorNormativo.ESPORTE: ["esporte", "desporto", "futebol"],
+    SetorNormativo.ENERGIA: ["energia", "elétric", "eletric", "petróleo", "petroleo", "gás", "gas", "combustível", "combustivel", "aneel"],
+    SetorNormativo.TRANSPORTE: ["transport", "rodovia", "ferrovi", "porto", "antt", "dnit"],
+    SetorNormativo.AVIACAO: ["aviação", "aviacao", "aeronáut", "aeronaut", "aeroporto", "anac"],
+    SetorNormativo.MINERACAO: ["mineração", "mineracao", "minério", "minerio", "anm"],
+    SetorNormativo.TELECOMUNICACOES: ["telecom", "anatel", "internet", "banda larga", "5g"],
+    SetorNormativo.SANEAMENTO: ["saneamento", "água", "agua", "esgoto"],
+    SetorNormativo.ESPORTE: ["esporte", "desporto", "futebol", "olímpico", "olimpico"],
 }
 
-INFRA_KEYWORDS_SEARCH = [
-    "infraestrutura",
-    "energia elétrica",
-    "telecomunicações",
-    "mineração",
-    "aviação civil",
-    "saneamento básico",
-    "transporte",
+INFRA_KEYWORDS_FILTER = [kw for kws in KEYWORDS_SETOR.values() for kw in kws] + [
+    "infraestrutura", "concessão", "concessao", "regulação", "regulacao",
+    "agência reguladora", "agencia reguladora", "licitação", "licitacao",
+    "privatização", "privatizacao", "parceria público", "parceria publico",
 ]
 
 
@@ -54,77 +52,89 @@ def _detectar_setor_senado(texto: str) -> SetorNormativo:
     return SetorNormativo.GERAL
 
 
+def _is_infra_relevante(ementa: str) -> bool:
+    ementa_lower = ementa.lower()
+    return any(kw in ementa_lower for kw in INFRA_KEYWORDS_FILTER)
+
+
 class SenadoCollector(BaseCollector):
     """Collects bills from Senado Federal."""
 
     fonte = FonteNormativo.SENADO
 
     async def coletar(self) -> list[dict]:
-        results = []
         today = date.today()
         last_week = today - timedelta(days=7)
 
-        for keyword in INFRA_KEYWORDS_SEARCH:
-            try:
-                items = await self._buscar_materias(keyword, last_week, today)
-                results.extend(items)
-            except Exception as exc:
-                logger.warning(f"[SENADO] Erro ao buscar '{keyword}': {exc}")
+        all_materias = await self._buscar_por_periodo(last_week, today)
+        logger.info(f"[SENADO] Total de matérias no período: {len(all_materias)}")
 
-        # Deduplicate by Senado materia URL
-        seen = set()
-        unique = []
-        for item in results:
-            key = item.get("url", "") or item.get("titulo", "")[:80]
-            if key not in seen:
-                seen.add(key)
-                unique.append(item)
+        # Filter locally for infrastructure relevance
+        relevant = [m for m in all_materias if _is_infra_relevante(m.get("ementa", "") + m.get("titulo", ""))]
+        logger.info(f"[SENADO] Matérias relevantes para infraestrutura: {len(relevant)}")
+        return relevant
 
-        logger.info(f"[SENADO] Total coletado: {len(unique)} matérias únicas")
-        return unique
-
-    async def _buscar_materias(
-        self, keyword: str, data_inicio: date, data_fim: date
-    ) -> list[dict]:
+    async def _buscar_por_periodo(self, data_inicio: date, data_fim: date) -> list[dict]:
+        """Fetch all materias in a date range without keyword filter."""
         params = {
-            "palavraChave": keyword,
             "dataInicioApresentacao": data_inicio.strftime("%Y%m%d"),
             "dataFimApresentacao": data_fim.strftime("%Y%m%d"),
             "v": "7",
         }
 
-        resp = await self._get(
-            SENADO_MATERIAS_URL,
-            params=params,
-            headers={"Accept": "application/json"},
-        )
-        logger.info(f"[SENADO] HTTP {resp.status_code} para '{keyword}' - Content-Type: {resp.headers.get('content-type','?')}")
+        try:
+            resp = await self._get(
+                SENADO_MATERIAS_URL,
+                params=params,
+                headers={"Accept": "application/json"},
+            )
+        except Exception as exc:
+            logger.error(f"[SENADO] Falha na request HTTP: {exc}")
+            return []
+
+        logger.info(f"[SENADO] HTTP {resp.status_code} - Content-Type: {resp.headers.get('content-type', '?')}")
+
+        if resp.status_code != 200:
+            logger.error(f"[SENADO] Erro HTTP {resp.status_code}: {resp.text[:300]}")
+            return []
+
         try:
             data = resp.json()
         except Exception as exc:
-            logger.error(f"[SENADO] JSON parse error para '{keyword}': {exc} - body[:200]: {resp.text[:200]}")
+            logger.error(f"[SENADO] JSON parse error: {exc} - body[:200]: {resp.text[:200]}")
             return []
 
-        items = []
-        # Senado API returns nested structure
         materias_wrapper = data.get("PesquisaBasicaMateria", {})
         materias = materias_wrapper.get("Materias", {}).get("Materia", [])
 
-        if isinstance(materias, dict):  # single result is not wrapped in list
+        if not materias:
+            logger.info("[SENADO] Nenhuma matéria encontrada no período")
+            return []
+
+        if isinstance(materias, dict):
             materias = [materias]
 
+        items = []
         for materia in materias:
+            item = self._parse_materia(materia)
+            if item:
+                items.append(item)
+
+        return items
+
+    def _parse_materia(self, materia: dict) -> dict | None:
+        try:
             identificacao = materia.get("IdentificacaoMateria", {})
-            tipo_sigla = identificacao.get("SiglaSubtipoMateria") or identificacao.get(
-                "SiglaTipoMateria", "PL"
+            tipo_sigla = (
+                identificacao.get("SiglaSubtipoMateria")
+                or identificacao.get("SiglaTipoMateria", "PL")
             )
             numero = str(identificacao.get("NumeroMateria", ""))
             ano = str(identificacao.get("AnoMateria", ""))
-            ementa = materia.get("EmentaMateria", "")
+            ementa = materia.get("EmentaMateria", "") or ""
             materia_id = identificacao.get("CodigoMateria")
 
             titulo = f"{tipo_sigla} {numero}/{ano} - {ementa[:200]}"
-
             item_url = (
                 f"https://www25.senado.leg.br/web/atividade/materias/-/materia/{materia_id}"
                 if materia_id
@@ -132,14 +142,11 @@ class SenadoCollector(BaseCollector):
             )
 
             data_str = materia.get("DataApresentacao", "")
-            data_pub = self._parse_date(data_str, "%Y-%m-%d") or self._parse_date(
-                data_str, "%d/%m/%Y"
-            )
+            data_pub = self._parse_date(data_str, "%Y-%m-%d") or self._parse_date(data_str, "%d/%m/%Y")
 
             tipo = TIPO_MAP_SENADO.get(tipo_sigla, TipoNormativo.PROJETO_LEI)
-            setor = _detectar_setor_senado(f"{ementa} {keyword}")
+            setor = _detectar_setor_senado(ementa)
 
-            # Get author info if available
             autor = ""
             autoria = materia.get("AutoriaMateria", {})
             if isinstance(autoria, dict):
@@ -147,19 +154,18 @@ class SenadoCollector(BaseCollector):
 
             conteudo = f"Tipo: {tipo_sigla} {numero}/{ano}\nAutor: {autor}\nEmenta: {ementa}"
 
-            items.append(
-                {
-                    "titulo": titulo[:1000],
-                    "tipo": tipo,
-                    "numero": f"{numero}/{ano}",
-                    "fonte": FonteNormativo.SENADO,
-                    "setor": setor,
-                    "url": item_url,
-                    "data_publicacao": data_pub or datetime.now(),
-                    "ementa": ementa[:2000],
-                    "conteudo_bruto": conteudo,
-                    "tags": [tipo_sigla, keyword],
-                }
-            )
-
-        return items
+            return {
+                "titulo": titulo[:1000],
+                "tipo": tipo,
+                "numero": f"{numero}/{ano}",
+                "fonte": FonteNormativo.SENADO,
+                "setor": setor,
+                "url": item_url,
+                "data_publicacao": data_pub or datetime.now(),
+                "ementa": ementa[:2000],
+                "conteudo_bruto": conteudo,
+                "tags": [tipo_sigla],
+            }
+        except Exception as exc:
+            logger.warning(f"[SENADO] Erro ao parsear matéria: {exc}")
+            return None
