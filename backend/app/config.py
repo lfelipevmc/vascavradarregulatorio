@@ -61,11 +61,16 @@ class Settings(BaseSettings):
 
     @property
     def async_database_url(self) -> str:
-        """Return async-compatible database URL."""
         url = self.database_url
         if url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif url.startswith("sqlite:///") and "+aiosqlite" not in url:
+            url = url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
         return url
+
+    @property
+    def is_sqlite(self) -> bool:
+        return "sqlite" in self.database_url
 
     @property
     def is_production(self) -> bool:

@@ -3,7 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
-    ARRAY,
+
     Boolean,
     DateTime,
     Enum,
@@ -86,7 +86,7 @@ class Normativo(Base):
     resumo_ia: Mapped[str | None] = mapped_column(Text, nullable=True)
     ementa: Mapped[str | None] = mapped_column(Text, nullable=True)
     impacto: Mapped[str | None] = mapped_column(Text, nullable=True)
-    tags: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
+    tags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     embedding: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     hash_conteudo: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     processado_ia: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -119,7 +119,7 @@ class Usuario(Base):
         nullable=False,
         default=PlanoUsuario.FREE,
     )
-    setores_interesse: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
+    setores_interesse: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

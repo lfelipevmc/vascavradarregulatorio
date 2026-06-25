@@ -10,13 +10,11 @@ class Base(DeclarativeBase):
     pass
 
 
-engine = create_async_engine(
-    settings.async_database_url,
-    echo=settings.debug,
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True,
-)
+_engine_kwargs: dict = {"echo": settings.debug}
+if not settings.is_sqlite:
+    _engine_kwargs.update({"pool_size": 10, "max_overflow": 20, "pool_pre_ping": True})
+
+engine = create_async_engine(settings.async_database_url, **_engine_kwargs)
 
 AsyncSessionLocal = async_sessionmaker(
     engine,
