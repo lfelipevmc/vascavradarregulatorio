@@ -116,9 +116,10 @@ class BaseCollector(ABC):
         Returns True if it was a new record, False if duplicate.
         Triggers AI processing task for new records.
         """
-        texto_para_hash = (
-            data.get("conteudo_bruto") or data.get("ementa") or data.get("titulo") or ""
-        )
+        # Always include URL to ensure uniqueness even when content is identical
+        url_part = data.get("url") or ""
+        content_part = data.get("conteudo_bruto") or data.get("ementa") or data.get("titulo") or ""
+        texto_para_hash = f"{url_part}|{content_part}"
         hash_val = self._hash_conteudo(texto_para_hash)
         data["hash_conteudo"] = hash_val
 
