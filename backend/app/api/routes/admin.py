@@ -13,16 +13,16 @@ router = APIRouter()
 FONTES = ["dou", "aneel", "antt", "anac", "anatel", "anm", "tcu", "camara", "senado", "stj_stf"]
 
 COLLECTOR_MAP = {
-    "dou": ("app.collectors.dou", "DouCollector"),
-    "aneel": ("app.collectors.aneel", "AneelCollector"),
-    "antt": ("app.collectors.antt", "AnttCollector"),
-    "anac": ("app.collectors.anac", "AnacCollector"),
-    "anatel": ("app.collectors.anatel", "AnatelCollector"),
-    "anm": ("app.collectors.anm", "AnmCollector"),
-    "tcu": ("app.collectors.tcu", "TcuCollector"),
+    "dou": ("app.collectors.dou", "DOUCollector"),
+    "aneel": ("app.collectors.aneel", "ANEELCollector"),
+    "antt": ("app.collectors.antt", "ANTTCollector"),
+    "anac": ("app.collectors.anac", "ANACCollector"),
+    "anatel": ("app.collectors.anatel", "ANATELCollector"),
+    "anm": ("app.collectors.anm", "ANMCollector"),
+    "tcu": ("app.collectors.tcu", "TCUCollector"),
     "camara": ("app.collectors.camara", "CamaraCollector"),
     "senado": ("app.collectors.senado", "SenadoCollector"),
-    "stj_stf": ("app.collectors.stj_stf", "StjStfCollector"),
+    "stj_stf": ("app.collectors.stj_stf", "STJSTFCollector"),
 }
 
 
