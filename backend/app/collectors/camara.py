@@ -111,11 +111,6 @@ class CamaraCollector(BaseCollector):
             tipo = TIPO_MAP.get(tipo_sigla, TipoNormativo.PROJETO_LEI)
             setor = SETOR_POR_TEMA.get(tema_id, SetorNormativo.GERAL)
 
-            # Fetch more details if needed (ementa is often truncated)
-            full_ementa = ementa
-            if prop_id and len(ementa) < 100:
-                full_ementa = await self._buscar_ementa_completa(prop_id)
-
             items.append(
                 {
                     "titulo": titulo[:1000],
@@ -125,8 +120,8 @@ class CamaraCollector(BaseCollector):
                     "setor": setor,
                     "url": item_url,
                     "data_publicacao": data_pub or datetime.now(),
-                    "ementa": (full_ementa or ementa)[:2000],
-                    "conteudo_bruto": full_ementa or ementa,
+                    "ementa": ementa[:2000],
+                    "conteudo_bruto": ementa,
                     "tags": [tipo_sigla, f"tema_{tema_id}"],
                 }
             )

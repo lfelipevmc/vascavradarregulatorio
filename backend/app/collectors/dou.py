@@ -1,209 +1,137 @@
 """
 DOU (Diário Oficial da União) collector.
-Uses the InLabs API: https://inlabs.in.gov.br/
-API documentation: https://inlabs.in.gov.br/acesso-api/
+Uses the DOU public JSON index (no auth required):
+  https://www.in.gov.br/leiturajornal/data/dou-v4/secao{1,2,3}/{date}/index.json
+
+Fetches sections 1 and 2 and filters for infrastructure-related acts.
 """
 import logging
 from datetime import date, datetime, timedelta
 
-from bs4 import BeautifulSoup
+import httpx
 
 from app.collectors.base import BaseCollector
-from app.config import settings
 from app.models.normativo import FonteNormativo, SetorNormativo, TipoNormativo
 
 logger = logging.getLogger(__name__)
 
-INLABS_SEARCH_URL = "https://www.in.gov.br/consulta/-/buscar/dou"
-INLABS_API_BASE = "https://inlabs.in.gov.br"
-
-TIPO_MAP = {
-    "Lei": TipoNormativo.LEI,
-    "Decreto": TipoNormativo.DECRETO,
-    "Portaria": TipoNormativo.PORTARIA,
-    "Resolução": TipoNormativo.RESOLUCAO,
-    "Instrução Normativa": TipoNormativo.INSTRUCAO_NORMATIVA,
-    "Medida Provisória": TipoNormativo.MEDIDA_PROVISORIA,
-}
+DOU_JSON_BASE = "https://www.in.gov.br/leiturajornal/data/dou-v4"
 
 SETOR_KEYWORDS = {
-    SetorNormativo.ENERGIA: ["energia", "elétric", "ANEEL", "petróleo", "gás", "combustível", "geração", "transmissão"],
-    SetorNormativo.TRANSPORTE: ["transporte", "rodovia", "ferrovi", "ANTT", "porto", "aquaviário", "logística"],
-    SetorNormativo.AVIACAO: ["aviação", "aeronáut", "ANAC", "aeroporto", "aeronavegab"],
-    SetorNormativo.MINERACAO: ["mineração", "minério", "ANM", "DNPM", "extração mineral"],
-    SetorNormativo.TELECOMUNICACOES: ["telecomunicações", "ANATEL", "radiofrequência", "banda larga", "5G", "internet"],
-    SetorNormativo.SANEAMENTO: ["saneamento", "água", "esgoto", "resíduo", "ANA"],
-    SetorNormativo.ESPORTE: ["esporte", "desporto", "futebol", "clube", "atleta", "competição"],
+    SetorNormativo.ENERGIA: ["energia", "elétric", "aneel", "petróleo", "gás", "combustível", "geração", "transmissão"],
+    SetorNormativo.TRANSPORTE: ["transporte", "rodovia", "ferrovi", "antt", "porto", "aquaviário", "logística"],
+    SetorNormativo.AVIACAO: ["aviação", "aeronáut", "anac", "aeroporto"],
+    SetorNormativo.MINERACAO: ["mineração", "minério", "anm", "dnpm"],
+    SetorNormativo.TELECOMUNICACOES: ["telecomunicações", "anatel", "radiofrequência", "banda larga", "5g"],
+    SetorNormativo.SANEAMENTO: ["saneamento", "água", "esgoto", "resíduo", "ana"],
+    SetorNormativo.ESPORTE: ["esporte", "desporto", "futebol", "clube", "atleta"],
 }
+
+INFRA_FILTER_KEYWORDS = [kw for kws in SETOR_KEYWORDS.values() for kw in kws] + [
+    "infraestrutura", "concessão", "regulação", "agência reguladora",
+    "licitação", "parceria público", "privatização",
+]
 
 
 def _detectar_setor(texto: str) -> SetorNormativo:
     texto_lower = texto.lower()
     for setor, keywords in SETOR_KEYWORDS.items():
-        if any(kw.lower() in texto_lower for kw in keywords):
+        if any(kw in texto_lower for kw in keywords):
             return setor
     return SetorNormativo.GERAL
 
 
-def _detectar_tipo(titulo: str) -> TipoNormativo:
-    titulo_upper = titulo.upper()
-    if "LEI Nº" in titulo_upper or titulo_upper.startswith("LEI "):
+def _detectar_tipo(identifica: str) -> TipoNormativo:
+    t = identifica.upper()
+    if "LEI Nº" in t or t.startswith("LEI "):
         return TipoNormativo.LEI
-    if "DECRETO" in titulo_upper:
+    if "DECRETO" in t:
         return TipoNormativo.DECRETO
-    if "MEDIDA PROVISÓRIA" in titulo_upper or "MP Nº" in titulo_upper:
+    if "MEDIDA PROVISÓRIA" in t:
         return TipoNormativo.MEDIDA_PROVISORIA
-    if "INSTRUÇÃO NORMATIVA" in titulo_upper:
+    if "INSTRUÇÃO NORMATIVA" in t:
         return TipoNormativo.INSTRUCAO_NORMATIVA
-    if "RESOLUÇÃO" in titulo_upper:
+    if "RESOLUÇÃO" in t:
         return TipoNormativo.RESOLUCAO
-    if "PORTARIA" in titulo_upper:
-        return TipoNormativo.PORTARIA
     return TipoNormativo.PORTARIA
 
 
+def _is_relevante(item: dict) -> bool:
+    texto = " ".join([
+        item.get("identifica", ""),
+        item.get("title", ""),
+        item.get("ementa", ""),
+    ]).lower()
+    return any(kw in texto for kw in INFRA_FILTER_KEYWORDS)
+
+
 class DOUCollector(BaseCollector):
-    """Collects normativos from Diário Oficial da União via InLabs search API."""
+    """Collects normativos from DOU using the public JSON index API."""
 
     fonte = FonteNormativo.DOU
 
     async def coletar(self) -> list[dict]:
-        results = []
         today = date.today()
-        yesterday = today - timedelta(days=1)
+        # DOU doesn't publish on weekends; walk back to find last publication day
+        target = today - timedelta(days=1)
+        for _ in range(5):
+            if target.weekday() < 5:  # Mon-Fri
+                break
+            target -= timedelta(days=1)
 
-        for keyword in settings.dou_search_keywords[:5]:  # limit to avoid rate limiting
-            try:
-                items = await self._buscar_por_keyword(keyword, yesterday)
-                results.extend(items)
-            except Exception as exc:
-                logger.warning(f"[DOU] Erro ao buscar keyword '{keyword}': {exc}")
+        results = []
+        # Fetch sections 1 (executive acts) and 2 (ministerial acts)
+        for secao in [1, 2]:
+            items = await self._fetch_secao(secao, target)
+            results.extend(items)
 
-        # Deduplicate by URL within this batch
-        seen_urls = set()
-        unique = []
-        for item in results:
-            url = item.get("url", "")
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                unique.append(item)
-            elif not url:
-                unique.append(item)
+        logger.info(f"[DOU] {len(results)} atos relevantes coletados de {target}")
+        return results
 
-        logger.info(f"[DOU] Total coletado: {len(unique)} itens únicos")
-        return unique
-
-    async def _buscar_por_keyword(self, keyword: str, data: date) -> list[dict]:
-        """Search DOU via the public search endpoint."""
-        data_str = data.strftime("%d-%m-%Y")
-        params = {
-            "q": keyword,
-            "exactDate": data_str,
-            "sortType": "0",
-            "delta": "20",
-            "currentPage": "1",
-        }
-
+    async def _fetch_secao(self, secao: int, data: date) -> list[dict]:
+        url = f"{DOU_JSON_BASE}/secao{secao}/{data.strftime('%Y-%m-%d')}/index.json"
         try:
-            resp = await self._get(INLABS_SEARCH_URL, params=params)
-        except Exception as exc:
-            logger.warning(f"[DOU] Falha no request para keyword '{keyword}': {exc}")
-            return []
-
-        soup = BeautifulSoup(resp.text, "lxml")
-        items = []
-
-        # Parse result cards from the DOU search results page
-        for card in soup.select(".resultado-card, .search-results-item, article.resultado"):
-            try:
-                titulo_el = card.select_one("h2, h3, .titulo, .resultado-titulo")
-                titulo = titulo_el.get_text(strip=True) if titulo_el else "Sem título"
-
-                link_el = card.select_one("a[href]")
-                url = ""
-                if link_el:
-                    href = link_el.get("href", "")
-                    url = href if href.startswith("http") else f"https://www.in.gov.br{href}"
-
-                ementa_el = card.select_one(".resultado-ementa, .ementa, p")
-                ementa = ementa_el.get_text(strip=True) if ementa_el else ""
-
-                data_el = card.select_one(".data-publicacao, time, .date")
-                data_pub = None
-                if data_el:
-                    date_text = data_el.get("datetime") or data_el.get_text(strip=True)
-                    data_pub = self._parse_date(date_text, "%Y-%m-%d") or self._parse_date(
-                        date_text, "%d/%m/%Y"
-                    )
-
-                tipo = _detectar_tipo(titulo)
-                setor = _detectar_setor(f"{titulo} {ementa}")
-
-                if not titulo or titulo == "Sem título":
-                    continue
-
-                items.append(
-                    {
-                        "titulo": titulo[:1000],
-                        "tipo": tipo,
-                        "fonte": FonteNormativo.DOU,
-                        "setor": setor,
-                        "url": url,
-                        "ementa": ementa[:2000] if ementa else None,
-                        "data_publicacao": data_pub or datetime.combine(data, datetime.min.time()),
-                        "conteudo_bruto": ementa,
-                    }
-                )
-            except Exception as exc:
-                logger.debug(f"[DOU] Erro ao parsear card: {exc}")
-
-        # Also try JSON endpoint (alternative DOU API approach)
-        if not items:
-            items = await self._buscar_api_json(keyword, data)
-
-        return items
-
-    async def _buscar_api_json(self, keyword: str, data: date) -> list[dict]:
-        """Fallback: try DOU's internal JSON API."""
-        data_str = data.strftime("%Y-%m-%d")
-        url = f"https://www.in.gov.br/leiturajornal/data/dou-v4/secao1/{data_str}/index.json"
-
-        try:
-            resp = await self._get(url)
+            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+                resp = await client.get(url, headers={"Accept": "application/json"})
+            if resp.status_code != 200:
+                logger.warning(f"[DOU] secao{secao} HTTP {resp.status_code}")
+                return []
             data_json = resp.json()
-        except Exception:
+        except Exception as exc:
+            logger.warning(f"[DOU] Falha ao buscar secao{secao}: {exc}")
             return []
 
+        content = data_json.get("content", [])
+        logger.info(f"[DOU] secao{secao}: {len(content)} atos totais")
+
         items = []
-        keyword_lower = keyword.lower()
-
-        for item in data_json.get("content", []):
-            titulo = item.get("title", "")
-            identifica = item.get("identifica", "")
-            full_text = f"{titulo} {identifica} {item.get('ementa', '')}"
-
-            if keyword_lower not in full_text.lower():
+        for item in content:
+            if not _is_relevante(item):
                 continue
 
-            tipo = _detectar_tipo(identifica or titulo)
-            setor = _detectar_setor(full_text)
-            pub_date = self._parse_date(item.get("pubDate", ""), "%Y-%m-%dT%H:%M:%S")
+            identifica = item.get("identifica", "") or item.get("title", "")
+            ementa = item.get("ementa", "") or ""
+            titulo = f"{identifica} - {ementa[:150]}" if ementa else identifica
 
             item_url = item.get("urlTitle", "")
             if item_url and not item_url.startswith("http"):
                 item_url = f"https://www.in.gov.br{item_url}"
 
-            items.append(
-                {
-                    "titulo": (identifica or titulo)[:1000],
-                    "tipo": tipo,
-                    "fonte": FonteNormativo.DOU,
-                    "setor": setor,
-                    "url": item_url,
-                    "ementa": item.get("ementa", "")[:2000],
-                    "data_publicacao": pub_date or datetime.combine(data, datetime.min.time()),
-                    "conteudo_bruto": item.get("body", ""),
-                }
-            )
+            pub_date = self._parse_date(item.get("pubDate", ""), "%Y-%m-%dT%H:%M:%S")
+            tipo = _detectar_tipo(identifica)
+            setor = _detectar_setor(f"{identifica} {ementa}")
 
+            items.append({
+                "titulo": titulo[:1000],
+                "tipo": tipo,
+                "fonte": FonteNormativo.DOU,
+                "setor": setor,
+                "url": item_url,
+                "ementa": ementa[:2000],
+                "data_publicacao": pub_date or datetime.combine(data, datetime.min.time()),
+                "conteudo_bruto": item.get("body", ementa),
+                "tags": [f"dou-secao{secao}"],
+            })
+
+        logger.info(f"[DOU] secao{secao}: {len(items)} relevantes")
         return items
