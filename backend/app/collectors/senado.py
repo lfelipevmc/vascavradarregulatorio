@@ -116,36 +116,31 @@ class SenadoCollector(BaseCollector):
         return items
 
     def _parse_materia(self, materia: dict) -> dict | None:
+        """Parse a materia using API v7 flat structure:
+        {Codigo, Sigla, Numero, Ano, Ementa, Autor, Data, UrlDetalheMateria, ...}
+        """
         try:
-            identificacao = materia.get("IdentificacaoMateria", {})
-            tipo_sigla = (
-                identificacao.get("SiglaSubtipoMateria")
-                or identificacao.get("SiglaTipoMateria", "PL")
-            )
-            numero = str(identificacao.get("NumeroMateria", ""))
-            ano = str(identificacao.get("AnoMateria", ""))
-            ementa = materia.get("EmentaMateria", "") or ""
-            materia_id = identificacao.get("CodigoMateria")
-
-            titulo = f"{tipo_sigla} {numero}/{ano} - {ementa[:200]}"
+            tipo_sigla = materia.get("Sigla", "PL")
+            numero = str(materia.get("Numero", "")).lstrip("0") or "0"
+            ano = str(materia.get("Ano", ""))
+            ementa = materia.get("Ementa", "") or ""
+            autor = materia.get("Autor", "") or ""
+            materia_id = materia.get("Codigo", "")
             item_url = (
-                f"https://www25.senado.leg.br/web/atividade/materias/-/materia/{materia_id}"
-                if materia_id
-                else "https://www.senado.leg.br"
+                materia.get("UrlDetalheMateria")
+                or (f"https://www25.senado.leg.br/web/atividade/materias/-/materia/{materia_id}" if materia_id else "https://www.senado.leg.br")
             )
 
-            data_str = materia.get("DataApresentacao", "")
+            data_str = materia.get("Data", "")
             data_pub = self._parse_date(data_str, "%Y-%m-%d") or self._parse_date(data_str, "%d/%m/%Y")
+
+            # DescricaoIdentificacao already has "PDL 876/2025" format
+            descricao = materia.get("DescricaoIdentificacao", f"{tipo_sigla} {numero}/{ano}")
+            titulo = f"{descricao} - {ementa[:200]}" if ementa else descricao
 
             tipo = TIPO_MAP_SENADO.get(tipo_sigla, TipoNormativo.PROJETO_LEI)
             setor = _detectar_setor_senado(ementa)
-
-            autor = ""
-            autoria = materia.get("AutoriaMateria", {})
-            if isinstance(autoria, dict):
-                autor = autoria.get("NomeAutor", "")
-
-            conteudo = f"Tipo: {tipo_sigla} {numero}/{ano}\nAutor: {autor}\nEmenta: {ementa}"
+            conteudo = f"Tipo: {descricao}\nAutor: {autor}\nEmenta: {ementa}"
 
             return {
                 "titulo": titulo[:1000],
