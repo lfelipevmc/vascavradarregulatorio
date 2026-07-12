@@ -49,20 +49,24 @@ def _start_scheduler() -> None:
 
         def run_collector(fonte: str) -> None:
             try:
-                import importlib
-                mod = importlib.import_module(f"app.collectors.{fonte}")
-                cls_name = "".join(p.capitalize() for p in fonte.split("_")) + "Collector"
-                collector = getattr(mod, cls_name)()
                 import asyncio
-                asyncio.run(collector.coletar())
-                logger.info("Coleta %s concluída", fonte)
+                import importlib
+                # Reuse the canonical collector map (class names are NOT derivable
+                # from the module name: DOUCollector, ANEELCollector, STJSTFCollector...)
+                from app.api.routes.admin import COLLECTOR_MAP
+                module_path, cls_name = COLLECTOR_MAP[fonte]
+                mod = importlib.import_module(module_path)
+                collector = getattr(mod, cls_name)()
+                # executar() = coletar + dedup + salvar + JobLog (coletar() alone does not persist)
+                result = asyncio.run(collector.executar())
+                logger.info("Coleta %s concluída: %s", fonte, result)
             except Exception as exc:
                 logger.error("Erro na coleta %s: %s", fonte, exc)
 
         # Coleta diária: DOU às 06h, agências às 07h, TCU às 08h, legislativo às 09h
         for fonte, hour in [("dou", 6), ("aneel", 7), ("antt", 7), ("anac", 7),
                              ("anatel", 7), ("anm", 7), ("tcu", 8),
-                             ("camara", 9), ("senado", 9)]:
+                             ("camara", 9), ("senado", 9), ("stj_stf", 10)]:
             scheduler.add_job(
                 run_collector,
                 trigger=CronTrigger(hour=hour, minute=0),
